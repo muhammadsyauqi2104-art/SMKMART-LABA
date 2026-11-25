@@ -1,4 +1,5 @@
 from ast import While
+import msvcrt
 from pathlib import Path
 from datetime import datetime
 import random
@@ -9,6 +10,7 @@ User=Basenya/"User.txt"
 Laporannya=Basenya/"Laporan.txt"
 Kategori=Basenya/"Kategori.txt"
 Ditelstok=Basenya/"Ditelstok.txt"
+Labanya=Basenya/"Laba.txt"
 
 def spilstok(job):
     stok = {}
@@ -40,26 +42,24 @@ def spilstok(job):
         pass
     return stok
 def cadangan():
-    cadangan={}
+    cadangan=[]
     try:
         with Ditelstok.open('r', encoding='utf-8') as file:
             for line in file:
-                if not line.strip():
-                    continue
                 parts=line.strip().split('|')
                 idi=parts[0]
-                urut=parts[1]
+                urut=int(parts[1])
                 tanggal=parts[2]
-                stoktambah=parts[3]
-                modal=parts[4]
+                stoktambah=int(parts[3])
+                modal=int(parts[4])
 
-                cadangan={
+                cadangan.append({
                     'ID':idi,
                     'Urut':urut,
                     'Tanggal':tanggal,
                     'Ditambah':stoktambah,
                     'Harga Modal':modal
-                }
+                })
     except FileNotFoundError:
         pass
     return cadangan
@@ -177,7 +177,8 @@ def spillaporan():
                                     "Nama Barang": nama,
                                     "Jumlah dibeli": jml,
                                     "Harga Satuan": hrg_sat,
-                                    "Harga": hrg_tot
+                                    "Harga": hrg_tot,
+                                    "Modal": int(b_parts[5]) if len(b_parts) > 5 else 0
                                 }
                             })
 
@@ -200,13 +201,17 @@ def simpanstok(dataterbaru):
             for aidi, detail in isikat.items():
                 kondisi = detail.get('Kondisi', 1)
                 file.write(f"{kat}|{aidi}|{detail['Nama Barang']}|{detail['Stok']}|{detail['Harga']}|{detail['Stok Minimum']}|{kondisi}\n")
-
+def simpancadang(Ini):
+    with Ditelstok.open('w', encoding='utf-8') as file:
+        for isi in Ini:
+            file.write(f"{isi['ID']}|{isi['Urut']}|{isi['Tanggal']}|{isi['Ditambah']}|{isi['Harga Modal']}\n")
 def simpanlaporan(omtewe, bulan):
     with Laporannya.open('a',encoding='utf-8') as file:
         barang_strings = []
         for item in omtewe['Barang yang dibeli']:
             for idb, detail in item.items():
-                b_str = f"{idb};{detail['Nama Barang']};{detail['Jumlah dibeli']};{detail['Harga Satuan']};{detail['Harga']}"
+                modal = sum(isi['Ditambah'] * isi['Harga Modal'] for isi in detail.get('Rincian', []))
+                b_str = f"{idb};{detail['Nama Barang']};{detail['Jumlah dibeli']};{detail['Harga Satuan']};{detail['Harga']};{modal}"
                 barang_strings.append(b_str)
         barang_gabungan = "#".join(barang_strings)
 
@@ -290,35 +295,40 @@ def editbarang(Aidibarang, namabaru, hargabaru, minimalbaru):
             break
     return berhasiledit
 
-def restokbarang(Aidinya, nambah, modal):
+def restokbarang(Aidinya, nambah):
     datanya=spilstok("ADMIN")
+    cadang=cadangan()
     hasil="Blum"
+    urut=0
+    w=datetime.now()
+    Posisi=w.strftime("%Y-%m-%d")
     for _, detailygy in datanya.items():
         for Idikan, ditel in detailygy.items():
             if Idikan==Aidinya:
+                for isi in cadang:
+                    if Aidinya==isi['ID'] and urut<isi['Urut']:
+                        urut=isi['Urut']
+                urut+=1
+                modal=input("Masukkan modal dari barang ini (Per barang)\n")
+                while not modal.isdigit():
+                    modal=input("Hanya masukkan angka!")
+                modal=int(modal)
                 ditel['Stok']+=nambah
                 simpanstok(datanya)
-                urutan=0
-                try:
-                    with Ditelstok.open('r', encoding='utf-8') as file:
-                        for line in file:
-                            if line.strip():
-                                parts=line.strip().split('|')
-                                if len(parts) >= 2 and parts[0] == Aidinya:
-                                    try:
-                                        urutan=max(urutan, int(parts[1]))
-                                    except ValueError:
-                                        pass
-                except FileNotFoundError:
-                    pass
-                with Ditelstok.open('a', encoding='utf-8') as file:
-                    waktu=datetime.now().strftime('%Y-%m-%d')
-                    file.write(f"{Aidinya}|{urutan+1}|{waktu}|{nambah}|{modal}\n")
+                cadang.append({
+                    'ID':Aidinya,
+                    'Urut':urut,
+                    'Tanggal':Posisi,
+                    'Ditambah':nambah,
+                    'Harga Modal':modal
+                })
+                simpancadang(cadang)
                 hasil="Udah"
                 break
         if hasil=="Udah":
             break
     return hasil
+
 def kurangibarang(Aidinya, dikurangi):
     datanya=spilstok("ADMIN")
     hasil="Blum"
@@ -393,27 +403,28 @@ def serch(Aidibarang, role):
 
 def transaksi(jumlahbeli, aidibrg):
     ambil=spilstok("ADMIN")
-    inidia=cadangan()
     ringkas=0
     for _, lain1 in ambil.items():
         for aidi, lain2 in lain1.items():
             if aidi==aidibrg:
                 if lain2['Kondisi']==0:
-                    return ringkas
+                    return ringkas, 0,[]
                 if lain2['Stok']>=jumlahbeli:
+                    modal, rincian=hitungbersih(aidibrg, jumlahbeli)
                     lain2['Stok']-=jumlahbeli
                     simpanstok(ambil)
-                    return hitungharga(jumlahbeli, lain2['Harga'])
+                    ringkas=hitungharga(jumlahbeli, lain2['Harga'])
+                    return ringkas, modal, rincian
                 else:
                     print("Stok barang tidak cukup!")
-                    return ringkas
-    return ringkas
+                    return ringkas, 0, []
+    return ringkas, 0, []
 
 def hitungharga(jumlah, hargabrg):
     ringkas=hargabrg*jumlah
     return ringkas
 
-def keranjangnya(idygy, keranjang, beli, akhir):
+def keranjangnya(idygy, keranjang, beli, akhir,rincian):
     z=spilstok("ADMIN")
     ditemukan = False
     for _, ntar in z.items():
@@ -425,6 +436,7 @@ def keranjangnya(idygy, keranjang, beli, akhir):
                     if idygy in item:
                         item[idygy]['Jumlah dibeli']+=beli
                         item[idygy]['Harga']+=akhir
+                        item[idygy]['Rincian'].extend(isina.copy() for isina in rincian)
                         dikeranjang=True
                         break
                 if not dikeranjang:
@@ -433,7 +445,8 @@ def keranjangnya(idygy, keranjang, beli, akhir):
                             'Nama Barang': sisay['Nama Barang'],
                             'Jumlah dibeli': beli,
                             'Harga Satuan': sisay['Harga'],
-                            'Harga': akhir
+                            'Harga': akhir,
+                            'Rincian':[isi.copy() for isi in rincian]
                         }
                     })
                 break
@@ -481,19 +494,19 @@ def nambahbarang():
     print("             Penambahan Barang Baru")
     print("================================================\n")
 
-    kat_dict = {}
+    Sukiaman = {}
     try:
         with Kategori.open("r",encoding='utf-8') as file_kat:
             for line in file_kat:
                 if line.strip():
                     p = line.strip().split('|')
-                    kat_dict[p[0]] = p[1]
+                    Sukiaman[p[0]] = p[1]
     except FileNotFoundError:
         print("File Kategori.txt tidak ditemukan!")
         return
 
     print("Kategori tersedia:")
-    for k in kat_dict:
+    for k in Sukiaman:
         print(f"- {k.title()}")
 
     print("- [Atau ketik 'BARU' untuk membuat kategori baru]")
@@ -502,13 +515,13 @@ def nambahbarang():
 
     if kat == "baru":
         kat = input("Masukkan nama kategori baru (contoh: minuman):\n").lower()
-        if kat in kat_dict:
+        if kat in Sukiaman:
             print("Kategori tersebut ternyata sudah terdaftar!")
-            inisial = kat_dict[kat]
+            inisial = Sukiaman[kat]
         else:
             while True:
                 inisial = input(f"Masukkan inisial untuk {kat.title()} (contoh: MNM):\n").upper()
-                if inisial in kat_dict.values():
+                if inisial in Sukiaman.values():
                     print("Inisial tersebut sudah digunakan! Gunakan inisial yang berbeda.")
                 elif len(inisial) == 0:
                     print("Inisial tidak boleh kosong!")
@@ -522,14 +535,14 @@ def nambahbarang():
             with Kategori.open("a",encoding='utf-8') as file_kat_append:
                 file_kat_append.write(f"\n{kat}|{inisial}\n")
 
-            kat_dict[kat] = inisial
+            Sukiaman[kat] = inisial
             print(f">> Kategori '{kat.title()}' berhasil disimpan!")
 
-    elif kat not in kat_dict:
+    elif kat not in Sukiaman:
         print("Kategori tidak valid/tidak terdaftar!")
         return
     else:
-        inisial = kat_dict[kat]
+        inisial = Sukiaman[kat]
 
     stok=spilstok("ADMIN")
 
@@ -547,13 +560,15 @@ def nambahbarang():
     print(f"\nID Otomatis dibuat: {eidi}")
 
     nam=input("Masukkan Nama Barangmu:\n")
-    try:
-        stk=int(input("Masukkan Stok awal:\n"))
-        hrg=int(input("Masukkan harga:\n"))
-        stkm=int(input("Masukkan stok minimum:\n"))
-    except ValueError:
-        print("Mohon masukkan angka!")
-        return
+    stk=input("Masukkan Stok awal:\n")
+    while not stk.isdigit():
+        stk=input("masukkan angka yang valid!:\n")
+    hrg=input("Masukkan harga:\n")
+    while not hrg.isdigit():
+        hrg=input("masukkan angka yang valid!:\n")
+    stkm=input("Masukkan stok minimum:\n")
+    while not stkm.isdigit():
+        stkm=input("Masukkan angka yang valid:\n")
 
     if kat not in stok:
         stok[kat]={}
@@ -607,15 +622,37 @@ def laporan(bulan):
     else:
         print(f"Tidak ada data laporan penjualan untuk tanggal {bulan}.")
 
-def hapuskeranjang(ygdihapus, IDdihapus):
-    cek=spilstok("ADMIN")
-    for _, iye in cek.items():
-        for aidi, lain in iye.items():
-            if aidi==IDdihapus:
-                lain['Stok']+=ygdihapus
-                simpanstok(cek)
-                return True
-    return False
+def simpanlaba(tanggal, laba_kotor, laba_bersih, barang):
+    with Labanya.open('a', encoding='utf-8') as file:
+        file.write(f"{tanggal} | {laba_kotor} | {laba_bersih} | {'#'.join(barang)}\n")
+
+def laba(tanggal):
+    laporan_data = spillaporan()
+    if tanggal not in laporan_data:
+        print(f"Tidak ada data penjualan untuk tanggal {tanggal}.")
+        return
+
+    total_harga = 0
+    total_modal = 0
+    barang = []
+    for transaksi in laporan_data[tanggal]:
+        total_harga += transaksi['Total Pembelian']
+        for item in transaksi['Barang yang dibeli']:
+            for idb, detail in item.items():
+                if idb not in barang:
+                    barang.append(idb)
+                total_modal += detail.get('Modal', 0)
+
+    laba_kotor = total_harga
+    laba_bersih = total_harga - total_modal
+    print(f"\n==== PERHITUNGAN LABA TANGGAL {tanggal} ====")
+    print(f"Total Modal       : Rp {total_modal:,.0f}".replace(",", "."))
+    print(f"Total Harga       : Rp {total_harga:,.0f}".replace(",", "."))
+    print(f"Laba Kotor        : Rp {laba_kotor:,.0f}".replace(",", "."))
+    print(f"Laba Bersih       : Rp {laba_bersih:,.0f}".replace(",", "."))
+    simpanlaba(tanggal, laba_kotor, laba_bersih, barang)
+    print("Hasil perhitungan berhasil disimpan ke Laba.txt.")
+
 
 def diaktifkan():
     print("\n== Pulihkan Barang ==")
@@ -676,7 +713,7 @@ def hapususer():
             return
         users = spiluser("Pos")
         berhasil=False
-        for aidi, ditel in users.items():
+        for aidi in users.items():
             if aidi_hapus == aidi:
                 semua=spiluser("Uni")
                 semua[aidi]['Kondisi']="0"
@@ -689,3 +726,139 @@ def hapususer():
             print("User berhasil dihapus dari sistem!")
         elif berhasil==False:
             print("ID User tidak ditemukan!")
+def hitungbersih(idina, dibeli):
+    cadang=cadangan()
+    asli=spilstok("ADMIN")
+    urut=1
+    hasil=[]
+    total=0
+    for _, ditel in asli.items():
+        for idi in ditel:
+            if idi==idina:
+                for isi in cadang:
+                    if isi['ID']==idina and urut<isi['Urut']:
+                        urut=isi['Urut']
+                    if isi['ID']==idina and isi['Urut']==urut and dibeli>0 and isi['Ditambah']>0:
+                        urut+=1
+                        smntr=isi['Ditambah']
+                        mdl=isi['Harga Modal']
+                        if smntr<dibeli:
+                            dambil=smntr
+                            iniuntung=smntr*mdl
+                            isi['Ditambah']=0
+                            dibeli-=smntr
+                        else:
+                            dambil=dibeli
+                            iniuntung=dibeli*mdl
+                            isi['Ditambah']=smntr-dibeli
+                            dibeli=0
+
+                        hasil.append({
+                            'ID':idina,
+                            'Urut':isi['Urut'],
+                            'Tanggal':isi['Tanggal'],
+                            'Ditambah':dambil,
+                            'Harga Modal':mdl
+                        })
+                        total+=iniuntung
+    simpancadang(cadang)
+    return total, hasil
+
+
+def hapuskeranjang(ygdihapus, IDdihapus, rincian):
+    cek = spilstok("ADMIN")
+    itulah = cadangan()
+    barang = None
+    for _, iye in cek.items():
+        if IDdihapus in iye:
+            barang = iye[IDdihapus]
+            break
+    if barang is None or ygdihapus <= 0:
+        return False
+    tersedia = 0
+    for data in rincian:
+        if data['ID'] == IDdihapus:
+            tersedia += data['Ditambah']
+    if ygdihapus > tersedia:
+        return False
+    jumlahbaru = tersedia - ygdihapus
+    for data in rincian:
+        if data['ID'] != IDdihapus or data['Ditambah'] <= 0:
+            continue
+        ditemukan = False
+        for isi in itulah:
+            if isi['ID'] == data['ID'] and isi['Urut'] == data['Urut']:
+                isi['Ditambah'] += data['Ditambah']
+                ditemukan = True
+                break
+        if not ditemukan:
+            itulah.append({
+                'ID': data['ID'],
+                'Urut': data['Urut'],
+                'Tanggal': data['Tanggal'],
+                'Ditambah': data['Ditambah'],
+                'Harga Modal': data['Harga Modal']
+            })
+    rincianbaru = [
+        data.copy() for data in rincian
+        if data['ID'] != IDdihapus
+    ]
+    batchbarang = sorted(
+        [isi for isi in itulah if isi['ID'] == IDdihapus],
+        key=lambda isi: isi['Urut']
+    )
+    sisa = jumlahbaru
+    for isi in batchbarang:
+        if sisa <= 0:
+            break
+        if isi['Ditambah'] <= 0:
+            continue
+        diambil = min(sisa, isi['Ditambah'])
+        isi['Ditambah'] -= diambil
+        rincianbaru.append({
+            'ID': isi['ID'],
+            'Urut': isi['Urut'],
+            'Tanggal': isi['Tanggal'],
+            'Ditambah': diambil,
+            'Harga Modal': isi['Harga Modal']
+        })
+        sisa -= diambil
+    if sisa > 0:
+        return False
+    try:
+        Stoklam = Stok.read_text(encoding='utf-8')
+        Cadlam = Ditelstok.read_text(encoding='utf-8')
+    except OSError:
+        return False
+    barang['Stok'] += ygdihapus
+    try:
+        simpancadang(itulah)
+        simpanstok(cek)
+    except OSError:
+        try:
+            Stok.write_text(Stoklam, encoding='utf-8')
+            Ditelstok.write_text(Cadlam, encoding='utf-8')
+        except OSError:
+            print("Peringatan: Gagal memulihkan file stok!")
+        return False
+    rincian[:] = rincianbaru
+    return True
+
+def Pewe(prompt="Password : "):
+    print(prompt, end="", flush=True)
+    password = ""
+    while True:
+        karakter = msvcrt.getwch()
+        if karakter == "\r":
+            print()
+            break
+        elif karakter == "\b":
+            if len(password) > 0:
+                password = password[:-1]
+                print("\b \b", end="", flush=True)
+        elif karakter in ("\x00", "\xe0"):
+            msvcrt.getwch()
+        else:
+            password += karakter
+            print("*", end="", flush=True)
+    return password
